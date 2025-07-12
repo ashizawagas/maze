@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>迷路宝箱探索</title>
+<script type="importmap">
+  {"imports": {"three": "https://unpkg.com/three@0.160.1/build/three.module.js",
+  "three/addons/": "https://unpkg.com/three@0.160.1/examples/jsm/"}}
+</script>
+<script type="module">
+let scene, renderer;
+const [width,height,w] = [800,600,320];
+let camera, light;
+let p = new THREE.Vector3(10,0,10);
+let f = new THREE.Vector3(1,0,0);
+let status = "ready", cnt = 0;
+const map = new Array(21).fill(null).map(() => new Array(21));
+
+// 宝箱関連の変数
+let treasures = [];
+let foundTreasures = 0;
+let totalTreasures = 0;
+let gameCleared = false;
+
+// 2D表示関連の変数
+let show2D = false;
+let canvas2D;
+let ctx2D;
+
+// 回転制御変数
+let targetRotation = 0;
+let currentRotation = 0;
+let isRotating = false;
+
+// 移動制御変数
+let isMoving = false;
+let moveStartPos = new THREE.Vector3();
+let moveTargetPos = new THREE.Vector3();
+
+// メッセージ表示関連の変数
+let messageElement;
+let messageTimeout;
+
+import * as THREE from "three";
+import * as BufferGeometryUtils from "three/addons/utils/BufferGeometryUtils.js";
+
+// 宝箱を作成する関数
+function createTreasureBox(x, y) {
+  const treasureGroup = new THREE.Group();
+  
+  // 宝箱の本体（茶色）
+  const boxGeometry = new THREE.BoxGeometry(w/4, w/4, w/4);
+  const boxMaterial = new THREE.MeshPhongMaterial({color: "#8B4513"});
+  const box = new THREE.Mesh(boxGeometry, boxMaterial);
+  box.position.set(0, w/8, 0);
+  treasureGroup.add(box);
+  
+  // 宝箱の蓋（少し明るい茶色）- 閉じた状態
+  const lidGeometry = new THREE.BoxGeometry(w/4 + 10, w/8, w/4 + 10);
+  const lidMaterial = new THREE.MeshPhongMaterial({color: "#A0522D"});
+  const lid = new THREE.Mesh(lidGeometry, lidMaterial);
+  lid.position.set(0, w/4, 0);
+  treasureGroup.add(lid);
+  
+  // 金色の装飾
+  const decorGeometry = new THREE.BoxGeometry(w/6, w/12, w/6);
+  const decorMaterial = new THREE.MeshPhongMaterial({color: "#FFD700"});
+  const decor = new THREE.Mesh(decorGeometry, decorMaterial);
+  decor.position.set(0, w/4 + w/16, 0);
+  treasureGroup.add(decor);
+  
+  // 宝箱の位置を設定
+  treasureGroup.position.set(x * w, 0, y * w);
+  
+  // 宝箱データを保存
+  const treasureData = {
+    group: treasureGroup,
+    box: box,
+    lid: lid,
+    decor: decor,
+    x: x,
+    y: y,
+    found: false,
+    originalY: 0,
+    lidOpenAngle: 0
+  };
+  
+  treasures.push(treasureData);
+  scene.add(treasureGroup);
+  
+  return treasureData;
+}
+
+// 宝箱を開くアニメーション
+function openTreasureBox(treasure) {
+  // 蓋を開く（回転させる）
+  treasure.lid.rotation.x = -Math.PI/2; // 90度後ろに倒す
+  treasure.lid.position.set(0, w/4 + w/16, -w/8); // 位置も調整
+  
+  // 装飾も蓋と一緒に移動
+  treasure.decor.rotation.x = -Math.PI/2;
+  treasure.decor.position.set(0, w/4 + w/8, -w/8);
+  
+  // 宝箱の中身（金貨）を追加
+  if (!treasure.treasure) {
+    const treasureGeometry = new THREE.SphereGeometry(w/12, 8, 6);
+    const treasureMaterial = new THREE.MeshPhongMaterial({
+      color: "#FFD700",
+      emissive: "#444400"
+    });
+    treasure.treasure = new THREE.Mesh(treasureGeometry, treasureMaterial);
+    treasure.treasure.position.set(0, w/6, 0);
+    treasure.group.add(treasure.treasure);
+  }
+}
+
+// メッセージを表示する関数
+function showMessage(text, duration = 3000) {
+  // 既存のメッセージがあれば削除
+  if (messageElement) {
+    messageElement.remove();
+  }
+  if (messageTimeout) {
+    clearTimeout(messageTimeout);
+  }
+  
+  // メッセージ要素を作成
+  messageElement = document.createElement('div');
+  messageElement.className = 'treasure-message';
+  messageElement.textContent = text;
+  document.body.appendChild(messageElement);
+  
+  // アニメーション開始
+  setTimeout(() => {
+    messageElement.classList.add('show');
+  }, 10);
+  
+  // 指定時間後にメッセージを削除
+  messageTimeout = setTimeout(() => {
+    if (messageElement) {
+      messageElement.classList.remove('show');
+      setTimeout(() => {
+        if (messageElement) {
+          messageElement.remove();
+          messageElement = null;
+        }
+      }, 500);
+    }
+  }, duration);
+}
+
+// 宝箱を見つけた時のアニメーション
+function findTreasure(treasure) {
+  if (treasure.found) return;
+  
+  treasure.found = true;
+  foundTreasures++;
+  
+  // 「たからばこ はっけん」メッセージを表示
+  showMessage('🎉 たからばこ はっけん！ 🎉', 2500);
+  
+  // 宝箱を光らせる
+  treasure.group.children.forEach(child => {
+    if (child.material) {
+      child.material.emissive = new THREE.Color(0x444400);
+    }
+  });
+  
+  // 宝箱を少し浮上させる
+  treasure.group.position.y = w/4;
+  
+  // 宝箱の発見アニメーション（スケールアップ）
+  const originalScale = treasure.group.scale.clone();
+  treasure.group.scale.set(1.5, 1.5, 1.5);
+  
+  // 0.5秒後に元のサイズに戻し、宝箱を開く
+  setTimeout(() => {
+    treasure.group.scale.copy(originalScale);
+    openTreasureBox(treasure);
+  }, 500);
+  
+  // UI更新
+  document.getElementById("found").innerText = foundTreasures;
+  document.getElementById("total").innerText = totalTreasures;
+  
+  // 全ての宝箱を見つけた場合
+  if (foundTreasures >= totalTreasures && !gameCleared) {
+    gameCleared = true;
+    document.getElementById("status").innerText = "🎉 クリア！おめでとうございます！ 🎉";
+    document.getElementById("status").style.color = "#FFD700";
+    document.getElementById("status").style.fontSize = "24px";
+    
+    // 全ての宝箱を虹色に光らせる
+    treasures.forEach(t => {
+      t.group.children.forEach(child => {
+        if (child.material) {
+          child.material.emissive = new THREE.Color(Math.random(), Math.random(), Math.random());
+        }
+      });
+    });
+    
+    // クリアメッセージを表示
+    setTimeout(() => {
+      showMessage('🏆 全ての宝箱を発見！ゲームクリア！ 🏆', 5000);
+    }, 1000);
+  }
+}
+
+// 移動可能かチェックする関数
+function canMoveTo(x, z) {
+  // 境界チェック
+  if (x < 0 || x >= 21 || z < 0 || z >= 21) return false;
+  // 壁チェック（map[x][z] == 0 が通路、1が壁）
+  return map[x][z] == 0;
+}
+
+// 2D表示を作成
+function create2DCanvas() {
+  canvas2D = document.createElement('canvas');
+  canvas2D.width = 400;
+  canvas2D.height = 400;
+  canvas2D.style.border = '2px solid #333';
+  canvas2D.style.display = 'none';
+  canvas2D.style.backgroundColor = '#f0f0f0';
+  ctx2D = canvas2D.getContext('2d');
+  document.getElementById("render2D").appendChild(canvas2D);
+}
+
+// 2D表示を更新
+function update2D() {
+  if (!show2D) return;
+  
+  ctx2D.clearRect(0, 0, canvas2D.width, canvas2D.height);
+  
+  const scale = canvas2D.width / 21;
+  
+  // 迷路を描画
+  for (let x = 0; x < 21; x++) {
+    for (let y = 0; y < 21; y++) {
+      if (map[x][y] == 1) {
+        ctx2D.fillStyle = '#333';
+        ctx2D.fillRect(x * scale, y * scale, scale, scale);
+      } else if (map[x][y] == 0) {
+        ctx2D.fillStyle = '#fff';
+        ctx2D.fillRect(x * scale, y * scale, scale, scale);
+      }
+    }
+  }
+  
+  // 宝箱を描画
+  treasures.forEach(treasure => {
+    if (treasure.found) {
+      // 開いた宝箱（金色の円）
+      ctx2D.fillStyle = '#FFD700';
+      ctx2D.beginPath();
+      ctx2D.arc(treasure.x * scale + scale/2, treasure.y * scale + scale/2, scale/3, 0, 2 * Math.PI);
+      ctx2D.fill();
+      // 中央に小さな宝石
+      ctx2D.fillStyle = '#FF4500';
+      ctx2D.beginPath();
+      ctx2D.arc(treasure.x * scale + scale/2, treasure.y * scale + scale/2, scale/8, 0, 2 * Math.PI);
+      ctx2D.fill();
+    } else {
+      // 閉じた宝箱（茶色の四角）
+      ctx2D.fillStyle = '#8B4513';
+      ctx2D.fillRect(treasure.x * scale + scale/4, treasure.y * scale + scale/4, scale/2, scale/2);
+    }
+  });
+  
+  // プレイヤーの位置を描画
+  ctx2D.fillStyle = '#FF0000';
+  ctx2D.fillRect(p.x * scale + scale/3, p.z * scale + scale/3, scale/3, scale/3);
+  
+  // プレイヤーの向きを描画
+  ctx2D.strokeStyle = '#FF0000';
+  ctx2D.lineWidth = 3;
+  ctx2D.beginPath();
+  ctx2D.moveTo(p.x * scale + scale/2, p.z * scale + scale/2);
+  ctx2D.lineTo((p.x + f.x) * scale + scale/2, (p.z + f.z) * scale + scale/2);
+  ctx2D.stroke();
+}
+
+// 2D表示の切り替え
+function toggle2D() {
+  show2D = !show2D;
+  if (show2D) {
+    canvas2D.style.display = 'block';
+    document.getElementById("render3D").style.display = 'none';
+    document.getElementById("viewMode").innerText = '3D表示に切り替え (P)';
+  } else {
+    canvas2D.style.display = 'none';
+    document.getElementById("render3D").style.display = 'block';
+    document.getElementById("viewMode").innerText = '2D表示に切り替え (P)';
+  }
+}
+
+window.onload = async () => {
+  // シーン、レンダラー、カメラ、ライト
+  scene = new THREE.Scene();
+  renderer = new THREE.WebGLRenderer({antialias: true});
+  renderer.setSize(width,height);
+  document.getElementById("render3D").appendChild(renderer.domElement);
+  
+  camera = new THREE.PerspectiveCamera(60,width/height,1,5000);
+  light = new THREE.PointLight("#FFFFFF",1200,0,1);
+  scene.add(light);
+  
+  // 環境光を追加（宝箱をよく見えるようにする）
+  const ambientLight = new THREE.AmbientLight("#404040", 0.4);
+  scene.add(ambientLight);
+
+  // 2D表示を作成
+  create2DCanvas();
+
+  // 迷路を作成
+  for (let x=0; x<21; x++) {
+    for (let y=0; y<21; y++) {
+      map[x][y] = -1;
+      if ((x > 0)&&(x < 20)&&(y > 0)&&(y < 20)) map[x][y] = 1;
+    }
+  }
+
+  dig(18,18);
+  const blocks = new Array();
+  
+  for (let x=0; x<21; x++) {
+    for (let y=0; y<21; y++) {
+      if (map[x][y] == 1) {
+        const box = new THREE.BoxGeometry(w-1,w-1,w-1);
+        box.translate(x*w,0,y*w);
+        blocks.push(box);
+      } else if (map[x][y] == 0) {
+        const dir = [map[x][y-1],map[x][y+1],map[x-1][y],map[x+1][y]];
+        let wallCount = 0;
+        dir.forEach(d => {if (d == 1) wallCount++;});
+        
+        // 行き止まり（3方向が壁）に宝箱を設置
+        if (wallCount == 3) {
+          createTreasureBox(x, y);
+          totalTreasures++;
+        }
+      }
+    }
+  }
+
+  // 迷路の壁を作成
+  const geometry = BufferGeometryUtils.mergeGeometries(blocks);
+  const material = new THREE.MeshPhongMaterial({color: "#FFFFF0"});
+  const mesh = new THREE.Mesh(geometry,material);
+  scene.add(mesh);
+
+  // UI更新
+  document.getElementById("total").innerText = totalTreasures;
+  document.getElementById("found").innerText = foundTreasures;
+
+  // キーボード操作（画面スクロール防止対応）
+  document.addEventListener("keydown", event => {
+    // 矢印キーとPキーの場合はデフォルトの動作を防ぐ
+    if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key) || 
+        event.key.toLowerCase() === "p") {
+      event.preventDefault();
+    }
+    
+    if (status == "ready" && !isRotating && !isMoving) {
+      // 右矢印キー（⇒）で右を向く（反時計回り）
+      if (event.key == "ArrowRight") {
+        targetRotation = currentRotation + Math.PI/2;
+        isRotating = true;
+        status = "rotating";
+      }
+      // 左矢印キー（⇦）で左を向く（時計回り）
+      if (event.key == "ArrowLeft") {
+        targetRotation = currentRotation - Math.PI/2;
+        isRotating = true;
+        status = "rotating";
+      }
+      if (event.key == "ArrowUp") {
+        // 移動先の座標を計算
+        const nextX = Math.round(p.x + f.x);
+        const nextZ = Math.round(p.z + f.z);
+        
+        // 移動可能かチェック
+        if (canMoveTo(nextX, nextZ)) {
+          moveStartPos.copy(p);
+          moveTargetPos.set(nextX, p.y, nextZ);
+          isMoving = true;
+          status = "moving";
+        }
+      }
+    }
+    
+    // 2D表示切り替え
+    if (event.key.toLowerCase() == "p") {
+      toggle2D();
+    }
+  });
+
+  update();
+}
+
+const dig = (x,y) => {
+  map[x][y] = 0;
+  const dir = [[-1,0],[1,0],[0,-1],[0,1]];
+  for (let i=dir.length-1; i>=0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [dir[i],dir[j]] = [dir[j],dir[i]];
+  }
+  for (let i=0; i<dir.length; i++) {
+    const [dx,dy] = dir[i];
+    const [tx1,ty1,tx2,ty2] = [x+dx,y+dy,x+dx*2,y+dy*2];
+    if ((map[tx1][ty1] == 1)&&(map[tx2][ty2] == 1)) {
+      map[tx1][ty1] = 0;
+      dig(tx2,ty2);
+    }
+  }
+}
+
+const update = () => {
+  // 回転処理
+  if (status == "rotating" && isRotating) {
+    const rotationSpeed = Math.PI/40;
+    const diff = targetRotation - currentRotation;
+    
+    if (Math.abs(diff) > rotationSpeed) {
+      currentRotation += Math.sign(diff) * rotationSpeed;
+      // 方向ベクトルを更新
+      f.x = Math.cos(currentRotation);
+      f.z = Math.sin(currentRotation);
+    } else {
+      currentRotation = targetRotation;
+      f.x = Math.cos(currentRotation);
+      f.z = Math.sin(currentRotation);
+      isRotating = false;
+      status = "ready";
+    }
+  }
+  
+  // 移動処理
+  if (status == "moving" && isMoving) {
+    const moveSpeed = 0.05; // 移動速度
+    const direction = new THREE.Vector3().subVectors(moveTargetPos, p);
+    const distance = direction.length();
+    
+    if (distance > moveSpeed) {
+      // まだ移動中
+      direction.normalize();
+      p.addScaledVector(direction, moveSpeed);
+    } else {
+      // 移動完了
+      p.copy(moveTargetPos);
+      isMoving = false;
+      status = "ready";
+      
+      // 現在位置の宝箱をチェック
+      treasures.forEach(treasure => {
+        if (treasure.x == p.x && treasure.y == p.z && !treasure.found) {
+          findTreasure(treasure);
+        }
+      });
+    }
+  }
+  
+  // 宝箱のアニメーション
+  treasures.forEach(treasure => {
+    if (!treasure.found) {
+      // 未発見の宝箱は回転
+      treasure.group.rotation.y += 0.01;
+    } else {
+      // 見つけた宝箱は上下に浮遊
+      treasure.group.position.y = w/4 + Math.sin(Date.now() * 0.003) * 10;
+      
+      // 宝箱の中身（金貨）も回転
+      if (treasure.treasure) {
+        treasure.treasure.rotation.y += 0.02;
+      }
+    }
+  });
+  
+  camera.position.set((p.x-f.x/2)*w,0,(p.z-f.z/2)*w);
+  camera.lookAt((p.x+f.x)*w,0,(p.z+f.z)*w);
+  light.position.copy(camera.position);
+  
+  // 2D表示を更新
+  update2D();
+  
+  renderer.render(scene,camera);
+  window.requestAnimationFrame(update);
+}
+</script>
+<style>
+#render3D, #render2D {
+  border: 2px solid #333;
+}
+#gameInfo {
+  font-family: Arial, sans-serif;
+  margin: 10px 0;
+  padding: 10px;
+  background-color: #f0f0f0;
+  border-radius: 5px;
+}
+#status {
+  font-weight: bold;
+  margin: 10px 0;
+  color: #333;
+}
+.treasure-info {
+  display: inline-block;
+  margin: 0 20px;
+  font-size: 18px;
+}
+.controls {
+  margin: 10px 0;
+  padding: 10px;
+  background-color: #e8e8e8;
+  border-radius: 5px;
+}
+#viewMode {
+  margin: 10px 0;
+  padding: 8px 16px;
+  background-color: #4CAF50;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+}
+#viewMode:hover {
+  background-color: #45a049;
+}
+
+/* 宝箱発見メッセージのスタイル */
+.treasure-message {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: linear-gradient(45deg, #FFD700, #FFA500);
+  color: #8B4513;
+  font-size: 36px;
+  font-weight: bold;
+  font-family: 'Arial', sans-serif;
+  padding: 20px 40px;
+  border-radius: 15px;
+  border: 4px solid #8B4513;
+  box-shadow: 0 0 30px rgba(255, 215, 0, 0.8);
+  z-index: 1000;
+  opacity: 0;
+  transform: translate(-50%, -50%) scale(0.5);
+  transition: all 0.5s ease-out;
+  text-align: center;
+  text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+.treasure-message.show {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+  animation: treasure-bounce 0.6s ease-out;
+}
+
+@keyframes treasure-bounce {
+  0% { transform: translate(-50%, -50%) scale(0.5); }
+  50% { transform: translate(-50%, -50%) scale(1.1); }
+  100% { transform: translate(-50%, -50%) scale(1); }
+}
+
+/* 宝箱発見時のキラキラエフェクト */
+.treasure-message::before {
+  content: '';
+  position: absolute;
+  top: -10px;
+  left: -10px;
+  right: -10px;
+  bottom: -10px;
+  background: linear-gradient(45deg, transparent, rgba(255, 255, 255, 0.3), transparent);
+  border-radius: 20px;
+  animation: sparkle 2s infinite;
+  z-index: -1;
+}
+
+@keyframes sparkle {
+  0%, 100% { opacity: 0; }
+  50% { opacity: 1; }
+}
+</style>
+</head>
+<body>
+<h1>🏰 迷路宝箱探索ゲーム 🏰</h1>
+<div id="gameInfo">
+  <div class="treasure-info">
+    💰 見つけた宝箱: <span id="found">0</span> / <span id="total">0</span>
+  </div>
+  <div id="status">宝箱を探してください！</div>
+</div>
+<div class="controls">
+  <strong>操作方法:</strong> ↑キー：前進 | ⇒キー：右を向く | ⇦キー：左を向く | Pキー：2D/3D表示切り替え
+</div>
+<button id="viewMode" onclick="toggle2D()">2D表示に切り替え (P)</button>
+<div id="render3D"></div>
+<div id="render2D"></div>
+</body>
+</html>
