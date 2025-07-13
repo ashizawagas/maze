@@ -32,6 +32,12 @@ let show2D = false;
 let canvas2D;
 let ctx2D;
 
+// マッピングエリア関連の変数
+let showMapping = false;
+let canvasMapping;
+let ctxMapping;
+let visitedCells = new Set();
+
 // 回転制御変数
 let targetRotation = 0;
 let currentRotation = 0;
@@ -104,13 +110,24 @@ function initializeGame() {
   isRotating = false;
   isMoving = false;
   
+  // 訪問済みセルをリセット
+  visitedCells.clear();
+  visitedCells.add(`${p.x},${p.z}`);
+  
   // 2D表示をリセット
   show2D = false;
   if (canvas2D) {
     canvas2D.style.display = 'none';
   }
   document.getElementById("render3D").style.display = 'block';
-  document.getElementById("viewMode").innerText = '2Dひょうじにきりかえ (P)';
+  document.getElementById("viewMode").innerText = '2Dひょうじにきりかえ (H)';
+  
+  // マッピングエリアをリセット
+  showMapping = false;
+  if (canvasMapping) {
+    canvasMapping.style.display = 'none';
+  }
+  document.getElementById("mappingMode").innerText = 'マッピングひょうじ (M)';
   
   // 迷路を再生成
   generateMaze();
@@ -398,6 +415,18 @@ function create2DCanvas() {
   document.getElementById("render2D").appendChild(canvas2D);
 }
 
+// マッピングエリアを作成
+function createMappingCanvas() {
+  canvasMapping = document.createElement('canvas');
+  canvasMapping.width = 300;
+  canvasMapping.height = 300;
+  canvasMapping.style.border = '2px solid #666';
+  canvasMapping.style.display = 'none';
+  canvasMapping.style.backgroundColor = '#2a2a2a';
+  ctxMapping = canvasMapping.getContext('2d');
+  document.getElementById("mappingArea").appendChild(canvasMapping);
+}
+
 // 2D表示を更新
 function update2D() {
   if (!show2D) return;
@@ -452,6 +481,67 @@ function update2D() {
   ctx2D.stroke();
 }
 
+// マッピングエリアを更新
+function updateMapping() {
+  if (!showMapping) return;
+  
+  ctxMapping.clearRect(0, 0, canvasMapping.width, canvasMapping.height);
+  
+  const scale = canvasMapping.width / mapSize;
+  
+  // 訪問済みの通路のみを描画
+  for (let x = 0; x < mapSize; x++) {
+    for (let y = 0; y < mapSize; y++) {
+      const cellKey = `${x},${y}`;
+      if (visitedCells.has(cellKey) && map[x][y] == 0) {
+        ctxMapping.fillStyle = '#444';
+        ctxMapping.fillRect(x * scale, y * scale, scale, scale);
+        
+        // 周囲の壁を描画（訪問済みセルの隣接セルが壁の場合）
+        const directions = [[-1,0], [1,0], [0,-1], [0,1]];
+        directions.forEach(([dx, dy]) => {
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx >= 0 && nx < mapSize && ny >= 0 && ny < mapSize && map[nx][ny] == 1) {
+            ctxMapping.fillStyle = '#666';
+            ctxMapping.fillRect(nx * scale, ny * scale, scale, scale);
+          }
+        });
+      }
+    }
+  }
+  
+  // 訪問済みの宝箱を描画
+  treasures.forEach(treasure => {
+    const cellKey = `${treasure.x},${treasure.y}`;
+    if (visitedCells.has(cellKey)) {
+      if (treasure.found) {
+        // 開いた宝箱（金色の円）
+        ctxMapping.fillStyle = '#FFD700';
+        ctxMapping.beginPath();
+        ctxMapping.arc(treasure.x * scale + scale/2, treasure.y * scale + scale/2, scale/3, 0, 2 * Math.PI);
+        ctxMapping.fill();
+      } else {
+        // 閉じた宝箱（茶色の四角）
+        ctxMapping.fillStyle = '#8B4513';
+        ctxMapping.fillRect(treasure.x * scale + scale/4, treasure.y * scale + scale/4, scale/2, scale/2);
+      }
+    }
+  });
+  
+  // プレイヤーの位置を描画
+  ctxMapping.fillStyle = '#FF0000';
+  ctxMapping.fillRect(p.x * scale + scale/3, p.z * scale + scale/3, scale/3, scale/3);
+  
+  // プレイヤーの向きを描画
+  ctxMapping.strokeStyle = '#FF0000';
+  ctxMapping.lineWidth = 2;
+  ctxMapping.beginPath();
+  ctxMapping.moveTo(p.x * scale + scale/2, p.z * scale + scale/2);
+  ctxMapping.lineTo((p.x + f.x) * scale + scale/2, (p.z + f.z) * scale + scale/2);
+  ctxMapping.stroke();
+}
+
 // 2D表示の切り替え
 function toggle2D() {
   if (gameState !== "playing") return;
@@ -460,11 +550,25 @@ function toggle2D() {
   if (show2D) {
     canvas2D.style.display = 'block';
     document.getElementById("render3D").style.display = 'none';
-    document.getElementById("viewMode").innerText = '3Dひょうじにきりかえ (P)';
+    document.getElementById("viewMode").innerText = '3Dひょうじにきりかえ (H)';
   } else {
     canvas2D.style.display = 'none';
     document.getElementById("render3D").style.display = 'block';
-    document.getElementById("viewMode").innerText = '2Dひょうじにきりかえ (P)';
+    document.getElementById("viewMode").innerText = '2Dひょうじにきりかえ (H)';
+  }
+}
+
+// マッピング表示の切り替え
+function toggleMapping() {
+  if (gameState !== "playing") return;
+  
+  showMapping = !showMapping;
+  if (showMapping) {
+    canvasMapping.style.display = 'block';
+    document.getElementById("mappingMode").innerText = 'マッピングひひょうじ (M)';
+  } else {
+    canvasMapping.style.display = 'none';
+    document.getElementById("mappingMode").innerText = 'マッピングひょうじ (M)';
   }
 }
 
@@ -485,6 +589,9 @@ window.onload = async () => {
 
   // 2D表示を作成
   create2DCanvas();
+  
+  // マッピングエリアを作成
+  createMappingCanvas();
 
   // スタートボタンのイベントリスナー
   document.getElementById("startButton").addEventListener("click", startGame);
@@ -496,9 +603,9 @@ window.onload = async () => {
 
   // キーボード操作（画面スクロール防止対応）
   document.addEventListener("keydown", event => {
-    // 矢印キーとPキーの場合はデフォルトの動作を防ぐ
+    // 矢印キー、H、Mキーの場合はデフォルトの動作を防ぐ
     if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key) || 
-        event.key.toLowerCase() === "p") {
+        event.key.toLowerCase() === "h" || event.key.toLowerCase() === "m") {
       event.preventDefault();
     }
     
@@ -530,9 +637,14 @@ window.onload = async () => {
       }
     }
     
-    // 2D表示切り替え
-    if (event.key.toLowerCase() == "p") {
+    // 2D表示切り替え（Hキー）
+    if (event.key.toLowerCase() == "h") {
       toggle2D();
+    }
+    
+    // マッピング表示切り替え（Mキー）
+    if (event.key.toLowerCase() == "m") {
+      toggleMapping();
     }
   });
 
@@ -600,6 +712,9 @@ const update = () => {
       isMoving = false;
       status = "ready";
       
+      // 訪問済みセルに追加
+      visitedCells.add(`${p.x},${p.z}`);
+      
       // 現在位置の宝箱をチェック
       treasures.forEach(treasure => {
         if (treasure.x == p.x && treasure.y == p.z && !treasure.found) {
@@ -632,14 +747,48 @@ const update = () => {
   // 2D表示を更新
   update2D();
   
+  // マッピング表示を更新
+  updateMapping();
+  
   renderer.render(scene,camera);
   window.requestAnimationFrame(update);
 }
 </script>
 <style>
+#gameContainer {
+  display: flex;
+  gap: 20px;
+}
+
+#mainArea {
+  flex: 1;
+}
+
+#sideArea {
+  width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
 #render3D, #render2D {
   border: 2px solid #333;
 }
+
+#mappingArea {
+  padding: 10px;
+  background-color: #f5f5f5;
+  border-radius: 5px;
+  border: 2px solid #ccc;
+}
+
+#mappingArea h3 {
+  margin: 0 0 10px 0;
+  font-size: 16px;
+  color: #333;
+  text-align: center;
+}
+
 #gameInfo {
   font-family: Arial, sans-serif;
   margin: 10px 0;
@@ -647,24 +796,28 @@ const update = () => {
   background-color: #f0f0f0;
   border-radius: 5px;
 }
+
 #status {
   font-weight: bold;
   margin: 10px 0;
   color: #333;
 }
+
 .treasure-info {
   display: inline-block;
   margin: 0 20px;
   font-size: 18px;
 }
+
 .controls {
   margin: 10px 0;
   padding: 10px;
   background-color: #e8e8e8;
   border-radius: 5px;
 }
-#viewMode {
-  margin: 10px 0;
+
+#viewMode, #mappingMode {
+  margin: 5px 0;
   padding: 8px 16px;
   background-color: #4CAF50;
   color: white;
@@ -672,9 +825,19 @@ const update = () => {
   border-radius: 4px;
   cursor: pointer;
   font-size: 14px;
+  width: 100%;
 }
-#viewMode:hover {
+
+#viewMode:hover, #mappingMode:hover {
   background-color: #45a049;
+}
+
+#mappingMode {
+  background-color: #2196F3;
+}
+
+#mappingMode:hover {
+  background-color: #1976D2;
 }
 
 /* スタート画面のスタイル */
@@ -846,7 +1009,7 @@ const update = () => {
     いきどまりにたからばこがかくされているよ。<br><br>
     <strong>そうさほうほう:</strong><br>
     ↑キー：ぜんしん | ⇒キー：みぎをむく | ⇦キー：ひだりをむく<br>
-    Pキー：2D/3Dひょうじきりかえ
+    Hキー：2D/3Dひょうじきりかえ | Mキー：マッピングひょうじきりかえ
   </p>
   
   <div class="level-selection">
@@ -880,11 +1043,24 @@ const update = () => {
     <div id="status">たからばこをさがしてください！</div>
   </div>
   <div class="controls">
-    <strong>そうさほうほう:</strong> ↑キー：ぜんしん | ⇒キー：みぎをむく | ⇦キー：ひだりをむく | Pキー：2D/3Dひょうじきりかえ
+    <strong>そうさほうほう:</strong> ↑キー：ぜんしん | ⇒キー：みぎをむく | ⇦キー：ひだりをむく | Hキー：2D/3Dひょうじきりかえ | Mキー：マッピングひょうじきりかえ
   </div>
-  <button id="viewMode" onclick="toggle2D()">2Dひょうじにきりかえ (P)</button>
-  <div id="render3D"></div>
-  <div id="render2D"></div>
+  
+  <div id="gameContainer">
+    <div id="mainArea">
+      <button id="viewMode" onclick="toggle2D()">2Dひょうじにきりかえ (H)</button>
+      <div id="render3D"></div>
+      <div id="render2D"></div>
+    </div>
+    
+    <div id="sideArea">
+      <div id="mappingArea">
+        <h3>🗺️ マッピングエリア</h3>
+        <button id="mappingMode" onclick="toggleMapping()">マッピングひょうじ (M)</button>
+        <!-- マッピングキャンバスがここに追加される -->
+      </div>
+    </div>
+  </div>
 </div>
 </body>
 </html>
